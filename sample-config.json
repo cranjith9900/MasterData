@@ -1,0 +1,12 @@
+{
+  "targetHeaders": ["code", "name", "active"],
+  "columnMap": {
+    "code": "Source Column A",
+    "name": "Source Column B",
+    "active": ""
+  },
+  "defaultValues": {
+    "active": "true"
+  },
+  "duplicateKeys": ["code", "name"]
+}
