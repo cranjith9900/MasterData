@@ -88,6 +88,129 @@ function getColumnMaxLengths(text, headers) {
   return maxLengths;
 }
 
+function flattenJsonValue(value, prefix = "", target = {}) {
+  if (Array.isArray(value)) {
+    if (value.length === 0) {
+      target[prefix] = "";
+      return target;
+    }
+
+    value.forEach((item, index) => {
+      flattenJsonValue(item, prefix ? `${prefix}.${index}` : String(index), target);
+    });
+    return target;
+  }
+
+  if (value && typeof value === "object") {
+    const entries = Object.entries(value);
+    if (entries.length === 0 && prefix) {
+      target[prefix] = "";
+      return target;
+    }
+
+    entries.forEach(([key, child]) => {
+      flattenJsonValue(child, prefix ? `${prefix}.${key}` : key, target);
+    });
+    return target;
+  }
+
+  target[prefix || "value"] = value === null || value === undefined ? "" : value;
+  return target;
+}
+
+function buildMappedCsv(sourceRows, mappings) {
+  const activeMappings = mappings
+    .map((mapping) => ({
+      target: String(mapping.target || "").trim(),
+      source: String(mapping.source || "").trim()
+    }))
+    .filter((mapping) => mapping.target);
+
+  const headers = [...new Set(activeMappings.map((mapping) => mapping.target))];
+  const rows = sourceRows.map((row) => {
+    const mappedRow = {};
+    activeMappings.forEach((mapping) => {
+      mappedRow[mapping.target] = row[mapping.source] ?? "";
+    });
+    return mappedRow;
+  });
+
+  const csv = [
+    headers.map((header) => `"${String(header).replace(/"/g, '""')}"`).join(","),
+    ...rows.map((row) =>
+      headers
+        .map((header) => {
+          const value = row[header];
+          const textValue = value === null || value === undefined ? "" : String(value);
+          return /[",\r\n]/.test(textValue)
+            ? `"${textValue.replace(/"/g, '""')}"`
+            : textValue;
+        })
+        .join(",")
+    )
+  ].join("\n");
+
+  return { headers, rows, csv };
+}
+
+function extractJsonColumns(text) {
+  const parsed = JSON.parse(text);
+  const sourceRows = Array.isArray(parsed)
+    ? parsed
+    : Array.isArray(parsed?.data)
+      ? parsed.data
+      : Array.isArray(parsed?.items)
+        ? parsed.items
+        : Array.isArray(parsed?.records)
+          ? parsed.records
+          : parsed && typeof parsed === "object"
+            ? [parsed]
+            : [];
+
+  const flattenedRows = sourceRows.map((row) => flattenJsonValue(row));
+  const sourceColumns = [...new Set(flattenedRows.flatMap((row) => Object.keys(row)))];
+  return { sourceRows, flattenedRows, sourceColumns };
+}
+
+function jsonToCsv(text) {
+  const parsed = JSON.parse(text);
+  const sourceRows = Array.isArray(parsed)
+    ? parsed
+    : Array.isArray(parsed?.data)
+      ? parsed.data
+      : Array.isArray(parsed?.items)
+        ? parsed.items
+        : Array.isArray(parsed?.records)
+          ? parsed.records
+          : parsed && typeof parsed === "object"
+            ? [parsed]
+            : [];
+
+  const flattenedRows = sourceRows.map((row) => flattenJsonValue(row));
+  const headers = [...new Set(flattenedRows.flatMap((row) => Object.keys(row)))];
+
+  if (!headers.length) {
+    return { headers: [], rows: [], csv: "" };
+  }
+
+  const csv = [
+    headers.map((header) => `"${String(header).replace(/"/g, '""')}"`).join(","),
+    ...flattenedRows.map((row) =>
+      headers
+        .map((header) => {
+          const value = row[header];
+          const textValue = value === null || value === undefined ? "" : String(value);
+          return /[",\r\n]/.test(textValue)
+            ? `"${textValue.replace(/"/g, '""')}"`
+            : textValue;
+        })
+        .join(",")
+    )
+  ].join("\n");
+
+  return { headers, rows: flattenedRows, csv };
+}
+
 function buildWorkatoCode(config) {
   const hasExplicitMapping = config.targetHeaders.some((target) => {
     const source = config.columnMap[target] || "";
@@ -272,6 +395,7 @@ def main(input_data):
 }
 
 function App() {
+  const [workspaceTab, setWorkspaceTab] = useState("home");
   const [csvFiles, setCsvFiles] = useState([]);
   const [headers, setHeaders] = useState([]);
   const [columnMaxLengths, setColumnMaxLengths] = useState({});
@@ -319,6 +443,18 @@ function App() {
       content: "Ask me about the generated Workato Python code, mappings, transformations, or how to change the output."
     }
   ]);
+  const [jsonFile, setJsonFile] = useState(null);
+  const [jsonSourceText, setJsonSourceText] = useState("");
+  const [jsonPreviewHeaders, setJsonPreviewHeaders] = useState([]);
+  const [jsonPreviewRows, setJsonPreviewRows] = useState([]);
+  const [jsonStatus, setJsonStatus] = useState("idle");
+  const [jsonMessage, setJsonMessage] = useState("");
+  const [jsonFileName, setJsonFileName] = useState("");
+  const [jsonMappings, setJsonMappings] = useState([
+    { source: "code", target: "ORO Code" },
+    { source: "name", target: "ORO Name" }
+  ]);
+  const [jsonExportCsv, setJsonExportCsv] = useState("");
 
   const selectedFileNames = csvFiles.map((file) => file.name).join(", ");
   const generatedSliceHeaders = transformations.sliceColumn.slices
@@ -728,6 +864,102 @@ function App() {
     }
   }
 
+  async function handleJsonFileChange(event) {
+    const file = (event.target.files || [])[0] || null;
+      setJsonFile(file);
+      setJsonStatus("idle");
+      setJsonMessage("");
+      setJsonPreviewHeaders([]);
+      setJsonPreviewRows([]);
+      setJsonFileName(file ? file.name : "");
+      setJsonExportCsv("");
+
+    if (!file) return;
+
+    try {
+      const text = await file.text();
+      setJsonSourceText(text);
+      const { sourceRows, flattenedRows, sourceColumns } = extractJsonColumns(text);
+      setJsonMappings((current) => {
+        const existingTargets = current.map((mapping) => mapping.target || "");
+        return sourceColumns.map((source, index) => ({
+          source,
+          target: existingTargets[index] || source
+        }));
+      });
+      setJsonPreviewHeaders(sourceColumns);
+      setJsonPreviewRows(flattenedRows.slice(0, 5));
+      setJsonStatus("success");
+      setJsonMessage(`Extracted ${sourceColumns.length} source column${sourceColumns.length === 1 ? "" : "s"} from ${file.name}.`);
+    } catch (error) {
+      setJsonStatus("error");
+      setJsonMessage(error.message || "Invalid JSON file.");
+      setJsonExportCsv("");
+    }
+  }
+
+  function downloadJsonCsv(csvText, fileName = "converted.csv") {
+    const blob = new Blob([csvText], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = fileName;
+    link.click();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+
+  function updateJsonMapping(index, field, value) {
+    setJsonMappings((current) =>
+      current.map((mapping, mappingIndex) =>
+        mappingIndex === index ? { ...mapping, [field]: value } : mapping
+      )
+    );
+  }
+
+  function addJsonMapping() {
+    setJsonMappings((current) => [...current, { source: "", target: "" }]);
+  }
+
+  function removeJsonMapping(index) {
+    setJsonMappings((current) => current.filter((_, mappingIndex) => mappingIndex !== index));
+  }
+
+  function convertJsonToCsv() {
+    if (!jsonSourceText.trim()) {
+      setJsonStatus("error");
+      setJsonMessage("Choose a JSON file first.");
+      return;
+    }
+
+    try {
+      const parsed = JSON.parse(jsonSourceText);
+      const sourceRows = Array.isArray(parsed)
+        ? parsed
+        : Array.isArray(parsed?.data)
+          ? parsed.data
+          : Array.isArray(parsed?.items)
+            ? parsed.items
+            : Array.isArray(parsed?.records)
+              ? parsed.records
+              : parsed && typeof parsed === "object"
+                ? [parsed]
+                : [];
+      const flattenedRows = sourceRows.map((row) => flattenJsonValue(row));
+      const { headers, rows, csv } = jsonMappings.some((mapping) => String(mapping.target || "").trim())
+        ? buildMappedCsv(flattenedRows, jsonMappings)
+        : jsonToCsv(jsonSourceText);
+      setJsonPreviewHeaders(headers);
+      setJsonPreviewRows(rows.slice(0, 5));
+      setJsonExportCsv(csv);
+      setJsonStatus("success");
+      setJsonMessage(`Converted ${rows.length} row${rows.length === 1 ? "" : "s"} to CSV.`);
+    } catch (error) {
+      setJsonStatus("error");
+      setJsonMessage(error.message || "Unable to convert JSON to CSV.");
+      setJsonExportCsv("");
+    }
+  }
+
   return (
     <main className="app-shell">
       <section className="workspace">
@@ -735,7 +967,7 @@ function App() {
           <div className="title-block">
             <span className="eyebrow">ORO workflow builder</span>
             <h1>Master Data Orchestration Studio</h1>
-            <p>Transform CSVs into clean supplier and procurement data flows, then generate Workato-ready Python with AI guidance.</p>
+            <p>Choose a workflow from the home page, then open a dedicated page for that file type.</p>
           </div>
           <div className="pipeline-graphic" aria-hidden="true">
             <div className="pipeline-node input-node">
@@ -758,6 +990,48 @@ function App() {
           </div>
         </header>
 
+        {workspaceTab === "home" && (
+          <div className="home-launcher">
+            <button type="button" className="launcher-card" onClick={() => setWorkspaceTab("transform")}>
+              <span className="launcher-kicker">CSV workflow</span>
+              <strong>Open CSV Transform</strong>
+              <p>Slice columns, map headers, dedupe, concatenate, and run Python output.</p>
+            </button>
+            <button type="button" className="launcher-card" onClick={() => setWorkspaceTab("json")}>
+              <span className="launcher-kicker">JSON workflow</span>
+              <strong>Open JSON to CSV</strong>
+              <p>Upload JSON, flatten nested fields, preview the data, and download CSV.</p>
+            </button>
+          </div>
+        )}
+
+        {workspaceTab !== "home" && (
+          <div className="workspace-tabs">
+            <button
+              type="button"
+              className={workspaceTab === "transform" ? "workspace-tab active" : "workspace-tab"}
+              onClick={() => setWorkspaceTab("transform")}
+            >
+              CSV Transform
+            </button>
+            <button
+              type="button"
+              className={workspaceTab === "json" ? "workspace-tab active" : "workspace-tab"}
+              onClick={() => setWorkspaceTab("json")}
+            >
+              JSON to CSV
+            </button>
+            <button
+              type="button"
+              className="workspace-tab"
+              onClick={() => setWorkspaceTab("home")}
+            >
+              Home
+            </button>
+          </div>
+        )}
+
+        {workspaceTab === "transform" ? (
         <div className="tool-layout">
           <form className="tool" onSubmit={transformCsv}>
             <label className="upload-zone">
@@ -1170,6 +1444,110 @@ function App() {
             <pre className="code-block compact"><code>{workatoConfig}</code></pre>
           </aside>
         </div>
+        ) : workspaceTab === "json" ? (
+        <div className="json-layout">
+          <section className="tool json-panel">
+            <div className="mapping-header">
+              <div>
+                <h2>JSON to CSV Converter</h2>
+                <p>Upload a JSON file, preview the rows, and export it as CSV.</p>
+              </div>
+            </div>
+
+            <div className="mapping-header">
+              <div>
+                <h2>Header Mapping</h2>
+                <p>Map source JSON fields to ORO target columns before exporting.</p>
+              </div>
+              <button type="button" className="icon-button" onClick={addJsonMapping} title="Add mapping">
+                <Plus size={18} />
+              </button>
+            </div>
+
+            <div className="mapping-grid json-mapping-grid">
+              <div className="grid-label">Source column</div>
+              <div className="grid-label">Target column</div>
+              <div className="grid-label"></div>
+              {jsonMappings.map((mapping, index) => (
+                <div className="json-mapping-row" key={index}>
+                  <input
+                    value={mapping.source}
+                    onChange={(event) => updateJsonMapping(index, "source", event.target.value)}
+                    placeholder="source field"
+                  />
+                  <input
+                    value={mapping.target}
+                    onChange={(event) => updateJsonMapping(index, "target", event.target.value)}
+                    placeholder="ORO target column"
+                  />
+                  <button
+                    type="button"
+                    className="icon-button danger"
+                    onClick={() => removeJsonMapping(index)}
+                    title="Remove mapping"
+                  >
+                    <Trash2 size={18} />
+                  </button>
+                </div>
+              ))}
+            </div>
+
+            <label className="upload-zone">
+              <FileUp size={24} />
+              <span>{jsonFile ? jsonFile.name : "Choose a JSON file"}</span>
+              <input
+                type="file"
+                accept=".json,application/json"
+                onChange={handleJsonFileChange}
+              />
+            </label>
+
+            <div className="json-actions">
+              <button type="button" onClick={convertJsonToCsv} disabled={!jsonSourceText.trim()}>
+                <Download size={16} />
+                Convert to CSV
+              </button>
+              {jsonExportCsv && (
+                <button
+                  type="button"
+                  className="secondary-button"
+                  onClick={() => downloadJsonCsv(jsonExportCsv, jsonFileName ? jsonFileName.replace(/\.json$/i, ".csv") : "converted.csv")}
+                >
+                  <Download size={16} />
+                  Download CSV
+                </button>
+              )}
+            </div>
+
+            {jsonMessage && <p className={`message ${jsonStatus}`}>{jsonMessage}</p>}
+
+            <div className="json-preview">
+              {jsonPreviewHeaders.length > 0 ? (
+                <table>
+                  <thead>
+                    <tr>
+                      {jsonPreviewHeaders.map((header) => (
+                        <th key={header}>{header}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {jsonPreviewRows.map((row, rowIndex) => (
+                      <tr key={rowIndex}>
+                        {jsonPreviewHeaders.map((header) => (
+                          <td key={header}>{String(row[header] ?? "")}</td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              ) : (
+                <p className="mapping-note">Your converted CSV preview will appear here.</p>
+              )}
+            </div>
+          </section>
+        </div>
+        ) : null}
       </section>
     </main>
   );

@@ -28,6 +28,50 @@ textarea {
   margin: 0 auto;
 }
 
+.home-launcher {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  margin-top: 22px;
+}
+
+.launcher-card {
+  min-height: 160px;
+  border: 1px solid #c8d2dc;
+  border-radius: 8px;
+  padding: 20px;
+  background: rgba(255, 255, 255, 0.94);
+  color: #143846;
+  text-align: left;
+  cursor: pointer;
+  box-shadow: 0 16px 34px rgba(8, 33, 48, 0.10);
+}
+
+.launcher-card:hover {
+  border-color: #7ea95d;
+  background: #f8fcf2;
+}
+
+.launcher-kicker {
+  display: inline-block;
+  margin-bottom: 8px;
+  color: #5d7f42;
+  font-size: 12px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.launcher-card strong {
+  display: block;
+  margin-bottom: 8px;
+  font-size: 20px;
+}
+
+.launcher-card p {
+  color: #5b6f79;
+  line-height: 1.5;
+}
+
 .topbar {
   display: flex;
   align-items: center;
@@ -241,6 +285,63 @@ h2 {
   grid-template-columns: minmax(0, 1fr) minmax(340px, 440px);
   gap: 22px;
   align-items: start;
+}
+
+.json-layout {
+  max-width: 1240px;
+}
+
+.json-panel {
+  width: 100%;
+}
+
+.json-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 14px 0;
+}
+
+.json-actions button {
+  min-height: 42px;
+  border: 0;
+  border-radius: 6px;
+  padding: 0 14px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: #0b5366;
+  color: #ffffff;
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.json-actions button:disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
+}
+
+.json-preview {
+  margin-top: 14px;
+  overflow: auto;
+}
+
+.json-preview table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.json-preview th,
+.json-preview td {
+  border: 1px solid #d7e1e8;
+  padding: 10px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.json-preview th {
+  background: #f3f8fb;
 }
 
 .tool,
@@ -629,6 +730,14 @@ h2 {
   align-items: center;
 }
 
+.json-mapping-grid {
+  grid-template-columns: minmax(140px, 1fr) minmax(140px, 1fr) 44px;
+}
+
+.json-mapping-row {
+  display: contents;
+}
+
 .mapping-toggle {
   margin-bottom: 12px;
 }
@@ -824,5 +933,14 @@ select:focus {
 
   .grid-label {
     display: none;
+  }
+
+  .json-mapping-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .json-mapping-row {
+    display: grid;
+    gap: 10px;
   }
 }
