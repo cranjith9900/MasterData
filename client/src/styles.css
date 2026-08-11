@@ -87,6 +87,28 @@ h2 {
   flex: 0 0 420px;
 }
 
+.workspace-tabs {
+  display: flex;
+  gap: 10px;
+  margin: 0 0 18px;
+}
+
+.workspace-tab {
+  min-height: 40px;
+  border: 1px solid #c8d2dc;
+  border-radius: 6px;
+  padding: 0 14px;
+  background: rgba(255, 255, 255, 0.88);
+  color: #143846;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.workspace-tab.active {
+  border-color: #7ea95d;
+  background: #f3faea;
+}
+
 .network-lines {
   position: absolute;
   inset: 0;
@@ -243,6 +265,80 @@ h2 {
   align-items: start;
 }
 
+.collections-full-tab {
+  max-width: 1240px;
+}
+
+.collections-panel {
+  background: rgba(255, 255, 255, 0.94);
+  border: 1px solid rgba(190, 205, 209, 0.88);
+  border-radius: 8px;
+  padding: 22px;
+  box-shadow: 0 22px 52px rgba(8, 33, 48, 0.14);
+}
+
+.collection-controls {
+  margin-top: 12px;
+}
+
+.collection-summary {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin: 16px 0;
+}
+
+.collection-summary > div {
+  border: 1px solid #d8e0e7;
+  border-radius: 6px;
+  padding: 12px;
+  background: #fbfcfd;
+}
+
+.collection-summary strong {
+  display: block;
+  font-size: 22px;
+}
+
+.collection-summary span {
+  color: #62747a;
+  font-size: 13px;
+}
+
+.collection-picker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.collection-chip {
+  border: 1px solid #cbd5df;
+  border-radius: 6px;
+  padding: 8px 10px;
+  background: #ffffff;
+  color: #143846;
+  cursor: pointer;
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+}
+
+.collection-chip.active {
+  border-color: #7ea95d;
+  background: #f3faea;
+}
+
+.collection-chip small {
+  color: #62747a;
+}
+
+.collection-chat {
+  display: grid;
+  gap: 10px;
+}
+
 .tool,
 .workato-panel {
   background: rgba(255, 255, 255, 0.94);
@@ -362,6 +458,22 @@ h2 {
 .concat-builder {
   display: grid;
   gap: 10px;
+}
+
+.advanced-checkbox-group {
+  display: grid;
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.advanced-group-header {
+  margin-bottom: 0;
+}
+
+.advanced-checkboxes {
+  display: grid;
+  gap: 10px;
+  padding-left: 28px;
 }
 
 .compact-field {
@@ -622,6 +734,115 @@ h2 {
   max-height: 180px;
 }
 
+.code-editor-shell {
+  display: grid;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.code-editor-header p {
+  margin-top: 4px;
+  color: #62747a;
+  font-size: 13px;
+}
+
+.code-editor {
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr);
+  border: 1px solid #d8e0e7;
+  border-radius: 6px;
+  overflow: hidden;
+  background: #081721;
+}
+
+.code-gutter {
+  padding: 14px 8px;
+  background: #07131c;
+  color: #6f8796;
+  font-family: "Cascadia Code", Consolas, "Courier New", monospace;
+  font-size: 12px;
+  line-height: 1.55;
+  text-align: right;
+  user-select: none;
+  white-space: pre;
+}
+
+.code-gutter span {
+  display: block;
+}
+
+.code-stage {
+  position: relative;
+  min-height: 220px;
+}
+
+.code-highlight {
+  margin: 0;
+  min-height: 100%;
+  border: 0;
+  border-radius: 0;
+  background: #081721;
+  color: #e8f0f5;
+  pointer-events: none;
+}
+
+.code-highlight .py-keyword {
+  color: #8bd5ff;
+}
+
+.code-highlight .py-string {
+  color: #d5e97f;
+}
+
+.code-highlight .py-number {
+  color: #f7b267;
+}
+
+.code-highlight .py-comment {
+  color: #6f8796;
+}
+
+.code-editor-input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  resize: vertical;
+  border: 0;
+  outline: none;
+  padding: 14px;
+  background: transparent;
+  color: transparent;
+  caret-color: #ffffff;
+  font-family: "Cascadia Code", Consolas, "Courier New", monospace;
+  font-size: 12px;
+  line-height: 1.55;
+  overflow: auto;
+  white-space: pre;
+}
+
+.code-editor-input::selection {
+  background: rgba(202, 255, 96, 0.28);
+}
+
+.code-editor-input::placeholder {
+  color: #98aab6;
+}
+
+.advanced-transforms {
+  width: 100%;
+  min-height: 280px;
+  resize: vertical;
+  border: 1px solid #cbd5df;
+  border-radius: 6px;
+  padding: 12px;
+  background: #ffffff;
+  color: #17202a;
+  font-family: "Cascadia Code", Consolas, "Courier New", monospace;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
 .mapping-grid {
   display: grid;
   grid-template-columns: minmax(140px, 1fr) minmax(140px, 1fr) minmax(120px, 1fr) 44px;
@@ -820,6 +1041,10 @@ select:focus {
 
   .runner-controls {
     grid-template-columns: 1fr;
+  }
+
+  .code-editor {
+    grid-template-columns: 36px minmax(0, 1fr);
   }
 
   .grid-label {

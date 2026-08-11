@@ -88,190 +88,213 @@ function getColumnMaxLengths(text, headers) {
   return maxLengths;
 }
 
+function escapeHtml(text) {
+  return text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
+function highlightPython(code) {
+  return escapeHtml(code)
+    .replace(/(^|\s)(#.*)$/gm, '$1<span class="py-comment">$2</span>')
+    .replace(/("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')/g, '<span class="py-string">$1</span>')
+    .replace(/\b(\d+(?:\.\d+)?)\b/g, '<span class="py-number">$1</span>')
+    .replace(/\b(def|return|if|elif|else|for|while|in|import|from|as|with|try|except|finally|class|lambda|True|False|None|and|or|not|break|continue|pass|raise|yield|async|await)\b/g, '<span class="py-keyword">$1</span>');
+}
+
 function buildWorkatoCode(config) {
-  const hasExplicitMapping = config.targetHeaders.some((target) => {
-    const source = config.columnMap[target] || "";
-    return source && source !== target;
-  });
-
-  if (!hasExplicitMapping) {
-    return `import pandas as pd
-import io
-
-def main(input_data):
-    raw_csv = input_data["input"]
-    df = pd.read_csv(
-        io.StringIO(raw_csv),
-        sep=",",
-        quotechar='"',
-        dtype=str
-    )
-
-    columns_to_check_for_missing_data = ${JSON.stringify(config.duplicateKeys.length ? config.duplicateKeys : config.targetHeaders.slice(0, 2), null, 4)}
-    lookup_keys = ${JSON.stringify(config.duplicateKeys, null, 4)}
-
-    errors = []
-
-    # Step 1: Check missing columns
-    missing_columns = [
-        col for col in columns_to_check_for_missing_data
-        if col not in df.columns
-    ]
-    if missing_columns:
-        errors.append(f"Missing required column(s): {', '.join(missing_columns)}")
-
-    # Step 2: Check missing values
-    missing_data = {}
-    for col in columns_to_check_for_missing_data:
-        if col in df.columns:
-            missing_rows = df[df[col].isna()].index.tolist()
-            if missing_rows:
-                missing_data[col] = [row + 1 for row in missing_rows]
-
-    transformations = ${JSON.stringify(config.transformations, null, 4)}
-
-    slice_config = transformations.get("sliceColumn", {})
-    if slice_config.get("enabled"):
-        source_col = slice_config.get("column", "")
-        if source_col in df.columns:
-            max_length = int(df[source_col].astype(str).str.len().max() or 0)
-            for slice_item in slice_config.get("slices", []):
-                target_col = str(slice_item.get("target", "")).strip()
-                if not target_col:
-                    continue
-                start = min(max(int(slice_item.get("start") or 0), 0), max_length)
-                end_value = slice_item.get("end")
-                end = int(end_value) if end_value not in (None, "") else None
-                if end is not None:
-                    end = min(max(end, start), max_length)
-                df[target_col] = df[source_col].astype(str).str.slice(start, end)
-
-    concat_config = transformations.get("concatenate", {})
-    if concat_config.get("enabled"):
-        concat_cols = [col for col in concat_config.get("columns", []) if col in df.columns]
-        output_col = str(concat_config.get("outputColumn", "")).strip()
-        if concat_cols and output_col:
-            separator = concat_config.get("separator", "") or ""
-            prefix = concat_config.get("prefix", "") or ""
-            suffix = concat_config.get("suffix", "") or ""
-            combined = df[concat_cols].astype(str).agg(separator.join, axis=1)
-            df[output_col] = prefix + combined + suffix
-
-    # Step 4: Remove duplicates
-    if lookup_keys and all(key in df.columns for key in lookup_keys):
-        df["composite_key"] = df[lookup_keys].astype(str).agg("-".join, axis=1)
-        duplicate_rows = df[df.duplicated("composite_key", keep="first")].index.tolist()
-        duplicate_rows = [row + 1 for row in duplicate_rows]
-        df = df.drop_duplicates(subset="composite_key", keep="first")
-        df.drop(columns=["composite_key"], inplace=True)
-    else:
-        duplicate_rows = []
-
-    # Step 8: CSV output
-    csv_output = df.to_csv(index=False)
-
-    # Step 9: Collect errors
-    if missing_data:
-        for col, rows in missing_data.items():
-            errors.append(
-                f"Column '{col}' has missing values in rows: {', '.join(map(str, rows))}"
-            )
-
-    if duplicate_rows:
-        errors.append(
-            f"Removed {len(duplicate_rows)} duplicate row(s) at rows: "
-            f"{', '.join(map(str, duplicate_rows))} based on column(s): "
-            f"{', '.join(lookup_keys)}"
-        )
-
-    return {
-        "status": "error" if errors else "success",
-        "errors": "\\n".join(errors),
-        "csv_output": csv_output,
-    }`;
-  }
-
-  return `import pandas as pd
-import csv
+  return `import csv
 import io
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 
-# Target headers for the final output
-targetHeaders = ${JSON.stringify(config.targetHeaders, null, 4)}
+CONFIG = ${JSON.stringify(config, null, 2)}
 
-# Mapping from source to target columns
-column_map = ${JSON.stringify(config.columnMap, null, 4)}
+def text(value):
+    return "" if value is None else str(value)
 
-# Default values for target columns
-default_values = ${JSON.stringify(config.defaultValues, null, 4)}
+def empty(value):
+    return value is None or text(value).strip() == ""
 
-# Duplicate check columns
-duplicate_keys = ${JSON.stringify(config.duplicateKeys, null, 4)}
+def number(value):
+    cleaned = text(value).replace("$", "").replace("%", "").replace(",", "").strip()
+    if not cleaned:
+        return None
+    try:
+        return float(cleaned)
+    except ValueError:
+        return None
 
-# Optional transformations selected in the UI
-transformations = ${JSON.stringify(config.transformations, null, 4)}
+def apply_text(row, transform):
+    target = transform.get("target", "").strip()
+    source = transform.get("source") or target
+    value = row.get(source, "")
+    kind = transform.get("type")
+    if kind == "trim":
+        value = text(value).strip()
+    elif kind == "uppercase":
+        value = text(value).upper()
+    elif kind == "lowercase":
+        value = text(value).lower()
+    elif kind == "replace":
+        value = text(value).replace(text(transform.get("find", "")), text(transform.get("replace", "")))
+    elif kind == "defaultIfEmpty":
+        value = transform.get("defaultValue", "") if empty(value) else value
+    elif kind == "nullIfEmpty":
+        value = None if empty(value) else value
+    row[target] = value
 
-def apply_transformations(df):
-    slice_config = transformations.get("sliceColumn", {})
-    if slice_config.get("enabled"):
-        source_col = slice_config.get("column", "")
-        if source_col in df.columns:
-            max_length = int(df[source_col].astype(str).str.len().max() or 0)
-            for slice_item in slice_config.get("slices", []):
-                target_col = str(slice_item.get("target", "")).strip()
-                if not target_col:
-                    continue
-                start = min(max(int(slice_item.get("start") or 0), 0), max_length)
-                end_value = slice_item.get("end")
-                end = int(end_value) if end_value not in (None, "") else None
-                if end is not None:
-                    end = min(max(end, start), max_length)
-                df[target_col] = df[source_col].astype(str).str.slice(start, end)
+def apply_date(row, transform):
+    target = transform.get("target", "").strip()
+    source = transform.get("source")
+    raw = text(row.get(source, ""))
+    if not raw:
+        row[target] = transform.get("defaultValue", "")
+        return
+    fmt = transform.get("inputFormat")
+    dt = datetime.strptime(raw, fmt) if fmt else datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    if transform.get("offsetDays"):
+        dt = dt + timedelta(days=int(transform.get("offsetDays", 0)))
+    timezone = transform.get("timezone")
+    if timezone:
+        dt = dt.astimezone(ZoneInfo(timezone))
+    output = transform.get("outputFormat", "iso")
+    if output == "date":
+        row[target] = dt.strftime("%Y-%m-%d")
+    elif output == "datetime":
+        row[target] = dt.strftime("%Y-%m-%d %H:%M:%S")
+    else:
+        row[target] = dt.isoformat()
 
-    concat_config = transformations.get("concatenate", {})
-    if concat_config.get("enabled"):
-        concat_cols = [col for col in concat_config.get("columns", []) if col in df.columns]
-        output_col = str(concat_config.get("outputColumn", "")).strip()
-        if concat_cols and output_col:
-            separator = concat_config.get("separator", "") or ""
-            prefix = concat_config.get("prefix", "") or ""
-            suffix = concat_config.get("suffix", "") or ""
-            combined = df[concat_cols].astype(str).agg(separator.join, axis=1)
-            df[output_col] = prefix + combined + suffix
+def apply_number(row, transform):
+    target = transform.get("target", "").strip()
+    source = transform.get("source")
+    value = number(row.get(source, ""))
+    if value is None:
+        row[target] = transform.get("defaultValue", "")
+        return
+    if transform.get("percentToDecimal"):
+        value = value / 100.0
+    if transform.get("round") is not None:
+        value = round(value, int(transform.get("round", 0)))
+    row[target] = value
 
-    return df
+def apply_conditional(row, transform):
+    target = transform.get("target", "").strip()
+    kind = transform.get("type")
+    if kind == "fallback":
+        for source in transform.get("sources", []):
+            value = row.get(source, "")
+            if not empty(value):
+                row[target] = value
+                return
+        row[target] = transform.get("defaultValue", "")
+    elif kind == "equals":
+        row[target] = transform.get("thenValue", "") if text(row.get(transform.get("source"), "")) == text(transform.get("when", "")) else transform.get("elseValue", "")
+
+def apply_lookup(row, lookup):
+    key = tuple(text(row.get(column, "")) for column in lookup.get("matchColumns", []))
+    for entry in lookup.get("table", []):
+        if key == tuple(text(entry.get(column, "")) for column in lookup.get("matchColumns", [])):
+            return entry.get(lookup.get("outputColumn", ""), lookup.get("defaultValue", ""))
+    return lookup.get("defaultValue", "")
+
+def apply_derived(row, transform):
+    target = transform.get("target", "").strip()
+    sources = [text(row.get(column, "")) for column in transform.get("sources", [])]
+    mode = transform.get("mode", "concat")
+    if mode == "full_name":
+        row[target] = " ".join(part for part in sources if part).strip()
+    elif mode == "address_lines":
+        row[target] = "\\n".join(part for part in sources if part)
+    elif mode == "composite_key":
+        row[target] = (transform.get("separator", "|")).join(part for part in sources if part)
+    else:
+        row[target] = f"{transform.get('prefix', '')}{(transform.get('separator', '')).join(sources)}{transform.get('suffix', '')}"
+
+def validate(row, rules):
+    errors = []
+    for rule in rules:
+        value = row.get(rule.get("column"), "")
+        if rule.get("required") and empty(value):
+            errors.append(f"{rule.get('column')} is required")
+        allowed = rule.get("allowedValues") or []
+        if allowed and text(value) not in allowed:
+            errors.append(f"{rule.get('column')} must be one of: {', '.join(allowed)}")
+        if rule.get("minLength") is not None and len(text(value)) < int(rule.get("minLength", 0)):
+            errors.append(f"{rule.get('column')} is too short")
+        if rule.get("maxLength") is not None and len(text(value)) > int(rule.get("maxLength", 0)):
+            errors.append(f"{rule.get('column')} is too long")
+        if rule.get("regex"):
+            import re
+            if not re.search(rule.get("regex"), text(value)):
+                errors.append(f"{rule.get('column')} failed validation")
+    return errors
 
 def main(input_data):
-    csv_file = input_data["input"]
-    df = pd.read_csv(io.StringIO(csv_file), sep=",", dtype=str).fillna("")
-    df = apply_transformations(df)
+    rows = list(csv.DictReader(io.StringIO(input_data["input"])))
+    headers = list(rows[0].keys()) if rows else []
+    warnings = []
 
-    df_mapped = pd.DataFrame()
+    for transform in CONFIG.get("advancedTransforms", {}).get("textTransforms", []):
+        for row in rows:
+            apply_text(row, transform)
+        if transform.get("target") and transform.get("target") not in headers:
+            headers.append(transform.get("target"))
+    for transform in CONFIG.get("advancedTransforms", {}).get("dateTransforms", []):
+        for row in rows:
+            apply_date(row, transform)
+        if transform.get("target") and transform.get("target") not in headers:
+            headers.append(transform.get("target"))
+    for transform in CONFIG.get("advancedTransforms", {}).get("numberTransforms", []):
+        for row in rows:
+            apply_number(row, transform)
+        if transform.get("target") and transform.get("target") not in headers:
+            headers.append(transform.get("target"))
+    for transform in CONFIG.get("advancedTransforms", {}).get("conditionals", []):
+        for row in rows:
+            apply_conditional(row, transform)
+        if transform.get("target") and transform.get("target") not in headers:
+            headers.append(transform.get("target"))
+    for lookup in CONFIG.get("advancedTransforms", {}).get("lookups", []):
+        for row in rows:
+            row[lookup.get("target", "")] = apply_lookup(row, lookup)
+        if lookup.get("target") and lookup.get("target") not in headers:
+            headers.append(lookup.get("target"))
+    for transform in CONFIG.get("advancedTransforms", {}).get("derivedFields", []):
+        for row in rows:
+            apply_derived(row, transform)
+        if transform.get("target") and transform.get("target") not in headers:
+            headers.append(transform.get("target"))
+    validation_rules = CONFIG.get("advancedTransforms", {}).get("validationRules", [])
+    if validation_rules:
+        filtered = []
+        for row in rows:
+            row_errors = validate(row, validation_rules)
+            if row_errors:
+                warnings.extend(row_errors)
+                if CONFIG.get("advancedTransforms", {}).get("validationMode") == "drop":
+                    continue
+            filtered.append(row)
+        rows = filtered
 
-    # Map columns from source to target
-    for target_col in targetHeaders:
-        if target_col in column_map and column_map[target_col] in df.columns:
-            df_mapped[target_col] = df[column_map[target_col]]
-        elif target_col in df.columns:
-            df_mapped[target_col] = df[target_col]
-        else:
-            df_mapped[target_col] = default_values.get(target_col, "")
+    output_mode = CONFIG.get("outputMode", "json")
+    if output_mode == "csv":
+        buffer = io.StringIO()
+        writer = csv.DictWriter(buffer, fieldnames=headers, lineterminator="\\n")
+        writer.writeheader()
+        for row in rows:
+            writer.writerow({header: row.get(header, "") for header in headers})
+        csv_output = buffer.getvalue()
+        return {"csv_output": csv_output, "warnings": warnings}
 
-    df_mapped = df_mapped.fillna("")
-
-    if duplicate_keys and all(key in df_mapped.columns for key in duplicate_keys):
-        df_mapped = df_mapped.drop_duplicates(subset=duplicate_keys, keep="first")
-
-    current_timestamp = datetime.now().isoformat()
-    if "updated_at" in df_mapped.columns:
-        df_mapped["updated_at"] = current_timestamp
-
-    records = df_mapped.to_dict(orient="records")
-    return {"json_output": records}`;
+    return {"json_output": rows, "warnings": warnings}`;
 }
 
 function App() {
+  const [workspaceTab, setWorkspaceTab] = useState("transform");
   const [csvFiles, setCsvFiles] = useState([]);
   const [headers, setHeaders] = useState([]);
   const [columnMaxLengths, setColumnMaxLengths] = useState({});
@@ -299,6 +322,33 @@ function App() {
       outputColumn: ""
     }
   });
+  const [advancedTransformsText, setAdvancedTransformsText] = useState(JSON.stringify({
+    textTransforms: [
+      { type: "trim", source: "name", target: "name_trimmed" },
+      { type: "uppercase", source: "code", target: "code_upper" },
+      { type: "defaultIfEmpty", source: "active", target: "active_clean", defaultValue: "true" }
+    ],
+    dateTransforms: [
+      { source: "created_at", target: "created_date", inputFormat: "yyyy-MM-dd", outputFormat: "date", offsetDays: 0, timezone: "UTC" }
+    ],
+    numberTransforms: [
+      { source: "amount", target: "amount_rounded", round: 2 },
+      { source: "percent", target: "percent_decimal", percentToDecimal: true }
+    ],
+    conditionals: [
+      { type: "fallback", sources: ["source_a", "source_b"], target: "preferred_source" }
+    ],
+    lookups: [
+      { target: "status_label", matchColumns: ["status"], outputColumn: "label", defaultValue: "", table: [{ status: "A", label: "Active" }] }
+    ],
+    derivedFields: [
+      { mode: "full_name", sources: ["first_name", "last_name"], target: "full_name" }
+    ],
+    validationRules: [
+      { column: "code", required: true, minLength: 1, regex: "^[A-Z0-9_-]+$" }
+    ],
+    validationMode: "keep"
+  }, null, 2));
   const [status, setStatus] = useState("idle");
   const [message, setMessage] = useState("");
   const [downloads, setDownloads] = useState([]);
@@ -307,7 +357,17 @@ function App() {
   const [aiStatus, setAiStatus] = useState("idle");
   const [aiMessage, setAiMessage] = useState("");
   const [improvedCode, setImprovedCode] = useState("");
+  const [editedCode, setEditedCode] = useState("");
   const [isCodeRemoved, setIsCodeRemoved] = useState(false);
+  const [advancedToggles, setAdvancedToggles] = useState({
+    textTransforms: false,
+    dateTransforms: false,
+    numberTransforms: false,
+    conditionals: false,
+    lookups: false,
+    derivedFields: false,
+    validationRules: false
+  });
   const [runOutputType, setRunOutputType] = useState("csv");
   const [runStatus, setRunStatus] = useState("idle");
   const [runMessage, setRunMessage] = useState("");
@@ -317,6 +377,19 @@ function App() {
     {
       role: "assistant",
       content: "Ask me about the generated Workato Python code, mappings, transformations, or how to change the output."
+    }
+  ]);
+  const [collections, setCollections] = useState([]);
+  const [collectionFiles, setCollectionFiles] = useState([]);
+  const [collectionName, setCollectionName] = useState("Workato knowledge base");
+  const [selectedCollectionId, setSelectedCollectionId] = useState("");
+  const [collectionStatus, setCollectionStatus] = useState("idle");
+  const [collectionMessage, setCollectionMessage] = useState("");
+  const [collectionChatInput, setCollectionChatInput] = useState("");
+  const [collectionChatMessages, setCollectionChatMessages] = useState([
+    {
+      role: "assistant",
+      content: "Upload a .zip or text files, build a collection, then ask questions against the indexed content."
     }
   ]);
 
@@ -332,6 +405,7 @@ function App() {
       : [];
   const availableHeaders = [...new Set([...headers, ...generatedSliceHeaders, ...generatedConcatHeaders])];
   const selectedSliceMaxLength = columnMaxLengths[transformations.sliceColumn.column] || "";
+  const selectedCollection = collections.find((collection) => collection.id === selectedCollectionId) || null;
 
   const config = useMemo(() => {
     const mappedTargetHeaders = enableMapping
@@ -356,12 +430,23 @@ function App() {
       columnMap,
       defaultValues,
       duplicateKeys: transformations.dedupe.enabled ? duplicateKeys : [],
-      transformations
+      transformations,
+      advancedTransforms: (() => {
+        try {
+          const parsed = JSON.parse(advancedTransformsText);
+          return Object.fromEntries(
+            Object.entries(parsed).filter(([key]) => advancedToggles[key] !== false)
+          );
+        } catch {
+          return {};
+        }
+      })(),
+      outputMode: runOutputType
     };
-  }, [rows, duplicateKeys, transformations, generatedSliceHeaders, generatedConcatHeaders, enableMapping]);
+  }, [rows, duplicateKeys, transformations, generatedSliceHeaders, generatedConcatHeaders, enableMapping, advancedTransformsText, runOutputType, advancedToggles]);
 
   const workatoCode = useMemo(() => buildWorkatoCode(config), [config]);
-  const displayedCode = isCodeRemoved ? "" : improvedCode || workatoCode;
+  const displayedCode = isCodeRemoved ? "" : editedCode || improvedCode || workatoCode;
   const workatoConfig = useMemo(() => JSON.stringify(config, null, 2), [config]);
 
   async function copyWorkatoCode() {
@@ -374,6 +459,7 @@ function App() {
 
   function removeCodeSnippet() {
     setImprovedCode("");
+    setEditedCode("");
     setIsCodeRemoved(true);
     setCopied(false);
     setAiStatus("idle");
@@ -381,6 +467,22 @@ function App() {
   }
 
   function restoreCodeSnippet() {
+    setIsCodeRemoved(false);
+  }
+
+  function updateAdvancedTransforms(value) {
+    setAdvancedTransformsText(value);
+  }
+
+  function toggleAdvancedToggle(key) {
+    setAdvancedToggles((current) => ({
+      ...current,
+      [key]: !current[key]
+    }));
+  }
+
+  function updateEditorCode(value) {
+    setEditedCode(value);
     setIsCodeRemoved(false);
   }
 
@@ -418,6 +520,7 @@ function App() {
       }
 
       setImprovedCode(data.code);
+      setEditedCode(data.code);
       setIsCodeRemoved(false);
       setAiStatus("success");
       setAiMessage("Code improved.");
@@ -473,6 +576,7 @@ function App() {
       const returnedCode = extractCodeBlock(assistantMessage);
       if (returnedCode) {
         setImprovedCode(returnedCode);
+        setEditedCode(returnedCode);
         setIsCodeRemoved(false);
         setAiMessage("Updated code detected and applied to the code panel.");
       }
@@ -482,6 +586,77 @@ function App() {
       setAiStatus("error");
       setAiMessage(error.message);
       setChatMessages((current) => [...current, { role: "assistant", content: error.message }]);
+    }
+  }
+
+  async function buildCollection() {
+    if (!collectionFiles.length) {
+      setCollectionStatus("error");
+      setCollectionMessage("Choose one or more .zip or text files first.");
+      return;
+    }
+
+    const formData = new FormData();
+    formData.append("collectionName", collectionName);
+    collectionFiles.forEach((file) => formData.append("files", file));
+
+    setCollectionStatus("loading");
+    setCollectionMessage("Indexing files...");
+
+    try {
+      const response = await fetch(`${API_BASE}/api/collections/index`, {
+        method: "POST",
+        body: formData
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.detail || data.error || "Unable to build collection.");
+      }
+
+      setCollections((current) => [data.collection, ...current.filter((item) => item.id !== data.collection.id)]);
+      setSelectedCollectionId(data.collection.id);
+      setCollectionStatus("success");
+      setCollectionMessage(`Built "${data.collection.name}" with ${data.collection.chunkCount} indexed chunks.`);
+    } catch (error) {
+      setCollectionStatus("error");
+      setCollectionMessage(error.message);
+    }
+  }
+
+  async function sendCollectionChatMessage() {
+    if (!selectedCollectionId) {
+      setCollectionStatus("error");
+      setCollectionMessage("Build or choose a collection first.");
+      return;
+    }
+
+    const content = collectionChatInput.trim();
+    if (!content) return;
+
+    const nextMessages = [...collectionChatMessages, { role: "user", content }];
+    setCollectionChatMessages(nextMessages);
+    setCollectionChatInput("");
+    setCollectionStatus("loading");
+    setCollectionMessage("");
+
+    try {
+      const response = await fetch(`${API_BASE}/api/collections/${selectedCollectionId}/chat`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message: content })
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.detail || data.error || "Unable to query the collection.");
+      }
+
+      setCollectionChatMessages((current) => [...current, { role: "assistant", content: data.message || "" }]);
+      setCollectionStatus("success");
+      setCollectionMessage(`Matched ${data.matches?.length || 0} snippets.`);
+    } catch (error) {
+      setCollectionStatus("error");
+      setCollectionMessage(error.message);
+      setCollectionChatMessages((current) => [...current, { role: "assistant", content: error.message }]);
     }
   }
 
@@ -758,6 +933,12 @@ function App() {
           </div>
         </header>
 
+        <div className="workspace-tabs">
+          <button type="button" className={workspaceTab === "transform" ? "workspace-tab active" : "workspace-tab"} onClick={() => setWorkspaceTab("transform")}>Transform Studio</button>
+          <button type="button" className={workspaceTab === "collections" ? "workspace-tab active" : "workspace-tab"} onClick={() => setWorkspaceTab("collections")}>Collections</button>
+        </div>
+
+        {workspaceTab === "transform" ? (
         <div className="tool-layout">
           <form className="tool" onSubmit={transformCsv}>
             <label className="upload-zone">
@@ -952,6 +1133,73 @@ function App() {
                     </div>
                   </div>
                 )}
+
+                <div className="advanced-checkbox-group">
+                  <div className="mapping-header advanced-group-header">
+                    <div>
+                      <h2>Advanced transforms</h2>
+                      <p>Turn on the transform families you want to configure.</p>
+                    </div>
+                  </div>
+                  <div className="advanced-checkboxes">
+                    <label className="transform-card">
+                      <input
+                        type="checkbox"
+                        checked={advancedToggles.textTransforms}
+                        onChange={() => toggleAdvancedToggle("textTransforms")}
+                      />
+                      <span>Text transforms</span>
+                    </label>
+                    <label className="transform-card">
+                      <input
+                        type="checkbox"
+                        checked={advancedToggles.dateTransforms}
+                        onChange={() => toggleAdvancedToggle("dateTransforms")}
+                      />
+                      <span>Date transforms</span>
+                    </label>
+                    <label className="transform-card">
+                      <input
+                        type="checkbox"
+                        checked={advancedToggles.numberTransforms}
+                        onChange={() => toggleAdvancedToggle("numberTransforms")}
+                      />
+                      <span>Number transforms</span>
+                    </label>
+                    <label className="transform-card">
+                      <input
+                        type="checkbox"
+                        checked={advancedToggles.conditionals}
+                        onChange={() => toggleAdvancedToggle("conditionals")}
+                      />
+                      <span>Conditional transforms</span>
+                    </label>
+                    <label className="transform-card">
+                      <input
+                        type="checkbox"
+                        checked={advancedToggles.lookups}
+                        onChange={() => toggleAdvancedToggle("lookups")}
+                      />
+                      <span>Lookup joins</span>
+                    </label>
+                    <label className="transform-card">
+                      <input
+                        type="checkbox"
+                        checked={advancedToggles.derivedFields}
+                        onChange={() => toggleAdvancedToggle("derivedFields")}
+                      />
+                      <span>Derived fields</span>
+                    </label>
+                    <label className="transform-card">
+                      <input
+                        type="checkbox"
+                        checked={advancedToggles.validationRules}
+                        onChange={() => toggleAdvancedToggle("validationRules")}
+                      />
+                      <span>Validation rules</span>
+                    </label>
+                  </div>
+                </div>
               </div>
             </div>
 
@@ -1114,9 +1362,33 @@ function App() {
               {aiMessage && <p className={`message ${aiStatus}`}>{aiMessage}</p>}
             </div>
 
-            <pre className={`code-block${displayedCode ? "" : " empty"}`}>
-              <code>{displayedCode || "Code snippet removed."}</code>
-            </pre>
+            <div className="code-editor-shell">
+              <div className="code-editor-header">
+                <div>
+                  <h2>Python Code</h2>
+                  <p>Edit the generated snippet before you run it.</p>
+                </div>
+              </div>
+              <div className="code-editor">
+                <div className="code-gutter" aria-hidden="true">
+                  {(displayedCode || " ").split("\n").map((_, index) => (
+                    <span key={index}>{index + 1}</span>
+                  ))}
+                </div>
+                <div className="code-stage">
+                  <pre className={`code-block code-highlight${displayedCode ? "" : " empty"}`} aria-hidden="true">
+                    <code dangerouslySetInnerHTML={{ __html: displayedCode ? highlightPython(displayedCode) : "Code snippet removed." }} />
+                  </pre>
+                  <textarea
+                    className="code-editor-input"
+                    value={displayedCode}
+                    spellCheck="false"
+                    onChange={(event) => updateEditorCode(event.target.value)}
+                    placeholder="Edit the generated Python code..."
+                  />
+                </div>
+              </div>
+            </div>
 
             <div className="runner-panel">
               <div className="runner-controls">
@@ -1170,6 +1442,95 @@ function App() {
             <pre className="code-block compact"><code>{workatoConfig}</code></pre>
           </aside>
         </div>
+        ) : (
+        <div className="collections-full-tab">
+          <div className="collections-panel">
+            <div className="mapping-header">
+              <div>
+                <h2>Collection Builder</h2>
+                <p>Upload a .zip, .txt, .md, .csv, or .json file, index it, then chat against the uploaded knowledge.</p>
+              </div>
+            </div>
+
+            <label className="upload-zone">
+              <FileUp size={24} />
+              <span>{collectionFiles.length ? `${collectionFiles.length} file(s) selected` : "Choose files or a .zip for collection training"}</span>
+              <input
+                type="file"
+                accept=".zip,.txt,.md,.csv,.json,.log,.xml,.html"
+                multiple
+                onChange={(event) => setCollectionFiles(Array.from(event.target.files || []))}
+              />
+            </label>
+
+            {collectionFiles.length > 0 && (
+              <div className="file-list">
+                {collectionFiles.map((file) => (
+                  <span key={`${file.name}-${file.lastModified}`}>{file.name}</span>
+                ))}
+              </div>
+            )}
+
+            <div className="transform-controls two collection-controls">
+              <input value={collectionName} onChange={(event) => setCollectionName(event.target.value)} placeholder="Collection name" />
+              <button type="button" className="secondary-button" onClick={buildCollection} disabled={collectionStatus === "loading"}>
+                {collectionStatus === "loading" ? "Indexing..." : "Build collection"}
+              </button>
+            </div>
+
+            <div className="collection-summary">
+              <div>
+                <strong>{collections.length}</strong>
+                <span>collections ready</span>
+              </div>
+              <div>
+                <strong>{selectedCollection ? selectedCollection.chunkCount : 0}</strong>
+                <span>indexed chunks</span>
+              </div>
+            </div>
+
+            <div className="collection-picker">
+              {collections.length > 0 ? collections.map((collection) => (
+                <button
+                  type="button"
+                  key={collection.id}
+                  className={selectedCollectionId === collection.id ? "collection-chip active" : "collection-chip"}
+                  onClick={() => setSelectedCollectionId(collection.id)}
+                >
+                  <span>{collection.name}</span>
+                  <small>{collection.chunkCount} chunks</small>
+                </button>
+              )) : <p className="empty-note">No collections yet. Build one from your uploaded files.</p>}
+            </div>
+
+            <div className="collection-chat">
+              <div className="chat-window">
+                {collectionChatMessages.map((message, index) => (
+                  <div className={`chat-message ${message.role}`} key={index}>{message.content}</div>
+                ))}
+              </div>
+              <textarea
+                value={collectionChatInput}
+                onChange={(event) => setCollectionChatInput(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" && !event.shiftKey) {
+                    event.preventDefault();
+                    sendCollectionChatMessage();
+                  }
+                }}
+                placeholder={selectedCollectionId ? "Ask about the uploaded collection..." : "Build a collection first"}
+              />
+              <div className="ai-actions">
+                <button type="button" onClick={sendCollectionChatMessage} disabled={collectionStatus === "loading"}>
+                  <Send size={16} />
+                  {collectionStatus === "loading" ? "Thinking..." : "Ask collection"}
+                </button>
+              </div>
+              {collectionMessage && <p className={`message ${collectionStatus}`}>{collectionMessage}</p>}
+            </div>
+          </div>
+        </div>
+        )}
       </section>
     </main>
   );
