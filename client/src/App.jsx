@@ -153,6 +153,86 @@ function buildMappedCsv(sourceRows, mappings) {
   return { headers, rows, csv };
 }
 
+function buildJsonWorkatoCode(mappings) {
+  const activeMappings = mappings
+    .map((mapping) => ({
+      target: String(mapping.target || "").trim(),
+      source: String(mapping.source || "").trim()
+    }))
+    .filter((mapping) => mapping.target && mapping.source);
+
+  const columnMapping = Object.fromEntries(
+    activeMappings.map((mapping) => [mapping.target, mapping.source])
+  );
+
+  return `import csv
+import io
+import json
+
+
+def main(input_data):
+
+    # Get JSON input from Workato
+    raw_input = input_data.get("input", [])
+
+    # If Workato sends JSON as a string, parse it
+    if isinstance(raw_input, str):
+        raw_input = json.loads(raw_input)
+
+    # Convert single object to list
+    if isinstance(raw_input, dict):
+        suppliers = [raw_input]
+    elif isinstance(raw_input, list):
+        suppliers = raw_input
+    else:
+        raise ValueError("Input must be a JSON object or JSON array")
+
+    # Final CSV columns and their source JSON fields
+    column_mapping = ${JSON.stringify(columnMapping, null, 4)}
+
+    # Create CSV
+    output = io.StringIO()
+
+    writer = csv.DictWriter(
+        output,
+        fieldnames=list(column_mapping.keys()),
+        lineterminator="\\n"
+    )
+
+    writer.writeheader()
+
+    # Transform suppliers
+    for supplier in suppliers:
+
+        if not isinstance(supplier, dict):
+            continue
+
+        # Skip objects such as {"count": 6}
+        if "Supplier Name" not in supplier and "SM Vendor ID" not in supplier:
+            continue
+
+        row = {}
+
+        for target_column, source_column in column_mapping.items():
+
+            value = supplier.get(source_column, "")
+
+            # Convert JSON null to blank
+            if value is None:
+                value = ""
+
+            row[target_column] = value
+
+        writer.writerow(row)
+
+    csv_output = output.getvalue()
+    output.close()
+
+    return {
+        "csv": csv_output
+    }`;
+}
+
 function extractJsonColumns(text) {
   const parsed = JSON.parse(text);
   const sourceRows = Array.isArray(parsed)
@@ -455,6 +535,7 @@ function App() {
     { source: "name", target: "ORO Name" }
   ]);
   const [jsonExportCsv, setJsonExportCsv] = useState("");
+  const jsonWorkatoCode = useMemo(() => buildJsonWorkatoCode(jsonMappings), [jsonMappings]);
 
   const selectedFileNames = csvFiles.map((file) => file.name).join(", ");
   const generatedSliceHeaders = transformations.sliceColumn.slices
@@ -1544,6 +1625,16 @@ function App() {
               ) : (
                 <p className="mapping-note">Your converted CSV preview will appear here.</p>
               )}
+            </div>
+
+            <div className="code-preview-shell">
+              <div className="mapping-header">
+                <div>
+                  <h2>Generated Python</h2>
+                  <p>This keeps the same Workato-style structure and only updates the mapping block.</p>
+                </div>
+              </div>
+              <pre className="code-block compact"><code>{jsonWorkatoCode}</code></pre>
             </div>
           </section>
         </div>
