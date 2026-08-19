@@ -291,11 +291,56 @@ function jsonToCsv(text) {
   return { headers, rows: flattenedRows, csv };
 }
 
+function toPythonLiteral(value) {
+  if (value === null || value === undefined) return "None";
+  if (typeof value === "boolean") return value ? "True" : "False";
+  if (typeof value === "number") return Number.isFinite(value) ? String(value) : "None";
+  if (typeof value === "string") return JSON.stringify(value);
+  if (Array.isArray(value)) {
+    if (value.length === 0) return "[]";
+    return `[\n${value.map((item) => `    ${toPythonLiteral(item).replace(/\n/g, "\n    ")}`).join(",\n")}\n]`;
+  }
+  if (typeof value === "object") {
+    const entries = Object.entries(value);
+    if (entries.length === 0) return "{}";
+    return `{\n${entries
+      .map(([key, item]) => `    ${JSON.stringify(key)}: ${toPythonLiteral(item).replace(/\n/g, "\n    ")}`)
+      .join(",\n")}\n}`;
+  }
+  return JSON.stringify(String(value));
+}
+
 function buildWorkatoCode(config) {
   const hasExplicitMapping = config.targetHeaders.some((target) => {
     const source = config.columnMap[target] || "";
     return source && source !== target;
   });
+  const concatConfig = config.transformations.concatenate || {};
+  const isConcatOnly =
+    !hasExplicitMapping &&
+    concatConfig.enabled &&
+    concatConfig.columns.length > 0 &&
+    concatConfig.outputColumn.trim() &&
+    !config.transformations.sliceColumn.enabled &&
+    config.duplicateKeys.length === 0;
+
+  if (isConcatOnly) {
+    return `import pandas as pd
+import io
+
+def main(input_data):
+    df = pd.read_csv(io.StringIO(input_data["input"]), dtype=str).fillna("")
+
+    columns = ${toPythonLiteral(concatConfig.columns)}
+    separator = ${JSON.stringify(concatConfig.separator || "")}
+    output_column = ${JSON.stringify(concatConfig.outputColumn.trim())}
+
+    df[output_column] = df[columns].agg(separator.join, axis=1)
+
+    return {
+        "csv_output": df.to_csv(index=False)
+    }`;
+  }
 
   if (!hasExplicitMapping) {
     return `import pandas as pd
@@ -310,8 +355,8 @@ def main(input_data):
         dtype=str
     )
 
-    columns_to_check_for_missing_data = ${JSON.stringify(config.duplicateKeys.length ? config.duplicateKeys : config.targetHeaders.slice(0, 2), null, 4)}
-    lookup_keys = ${JSON.stringify(config.duplicateKeys, null, 4)}
+    columns_to_check_for_missing_data = ${toPythonLiteral(config.duplicateKeys.length ? config.duplicateKeys : config.targetHeaders.slice(0, 2))}
+    lookup_keys = ${toPythonLiteral(config.duplicateKeys)}
 
     errors = []
 
@@ -331,7 +376,7 @@ def main(input_data):
             if missing_rows:
                 missing_data[col] = [row + 1 for row in missing_rows]
 
-    transformations = ${JSON.stringify(config.transformations, null, 4)}
+    transformations = ${toPythonLiteral(config.transformations)}
 
     slice_config = transformations.get("sliceColumn", {})
     if slice_config.get("enabled"):
@@ -401,19 +446,19 @@ import json
 from datetime import datetime
 
 # Target headers for the final output
-targetHeaders = ${JSON.stringify(config.targetHeaders, null, 4)}
+targetHeaders = ${toPythonLiteral(config.targetHeaders)}
 
 # Mapping from source to target columns
-column_map = ${JSON.stringify(config.columnMap, null, 4)}
+column_map = ${toPythonLiteral(config.columnMap)}
 
 # Default values for target columns
-default_values = ${JSON.stringify(config.defaultValues, null, 4)}
+default_values = ${toPythonLiteral(config.defaultValues)}
 
 # Duplicate check columns
-duplicate_keys = ${JSON.stringify(config.duplicateKeys, null, 4)}
+duplicate_keys = ${toPythonLiteral(config.duplicateKeys)}
 
 # Optional transformations selected in the UI
-transformations = ${JSON.stringify(config.transformations, null, 4)}
+transformations = ${toPythonLiteral(config.transformations)}
 
 def apply_transformations(df):
     slice_config = transformations.get("sliceColumn", {})
